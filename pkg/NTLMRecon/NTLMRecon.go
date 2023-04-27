@@ -21,10 +21,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/praetorian-inc/NTLMRecon/internal/ntlm"
 	"github.com/praetorian-inc/NTLMRecon/pkg/paths"
 	"github.com/praetorian-inc/NTLMRecon/pkg/structs"
+	"github.com/projectdiscovery/fastdialer/fastdialer"
+	"github.com/projectdiscovery/retryablehttp-go"
 )
 
 const (
@@ -41,17 +44,27 @@ func BruteForceNTLMEndpoints(targetURL string) ([]structs.NTLMReconOutput, error
 
 	ntlmAppPaths := paths.GetEmbeddedPaths()
 
+	if len(ntlmAppPaths) == 0 {
+		return endpoints, fmt.Errorf("included wordlist is empty")
+	}
+
 	url, err := url.Parse(targetURL)
 	if err != nil {
 		fmt.Println("Error parsing target URL: ", err)
 		return endpoints, fmt.Errorf("unable to parse the provided target URL: %s", err)
 	}
 
+	fastdialerInstance, err := fastdialer.NewDialer(fastdialer.DefaultOptions)
+	if err != nil {
+		return endpoints, err
+	}
+	defer fastdialerInstance.Close()
+
 	for _, ntlmAppPath := range ntlmAppPaths {
 		var endpoint structs.NTLMReconOutput
 
 		guessURL := url.Scheme + "://" + url.Host + ntlmAppPath
-		req, err := http.NewRequest("GET", guessURL, nil)
+		req, err := retryablehttp.NewRequest("GET", guessURL, nil)
 		if err != nil {
 			fmt.Println("Error creating HTTP request: ", err)
 			return endpoints, fmt.Errorf("unable to create HTTP request: %s", err)
@@ -67,16 +80,20 @@ func BruteForceNTLMEndpoints(targetURL string) ([]structs.NTLMReconOutput, error
 		// only HTTP/1.1 for this tool as a way to work around this edge case.
 		//
 
-		client := &http.Client{
+		client := retryablehttp.NewWithHTTPClient(&http.Client{
 			CheckRedirect: noRedirect,
+
+			Timeout: 5 * time.Second,
+
 			Transport: &http.Transport{
+				DialContext:  fastdialerInstance.Dial,
 				TLSNextProto: make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
 				TLSClientConfig: &tls.Config{
 					Renegotiation:      tls.RenegotiateOnceAsClient,
 					InsecureSkipVerify: true,
 				},
 			},
-		}
+		}, retryablehttp.DefaultOptionsSpraying)
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -123,6 +140,15 @@ func BruteForceNTLMEndpoints(targetURL string) ([]structs.NTLMReconOutput, error
 		endpoint.NTLMInfo = metadata
 
 		endpoints = append(endpoints, endpoint)
+	}
+
+	if len(endpoints) == len(ntlmAppPaths) {
+		endpoint := structs.NTLMReconOutput{
+			URL:      url.Scheme + "://" + url.Host + "/*",
+			NTLMInfo: endpoints[0].NTLMInfo,
+		}
+
+		return []structs.NTLMReconOutput{endpoint}, nil
 	}
 
 	return endpoints, nil
