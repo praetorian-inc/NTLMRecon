@@ -20,9 +20,6 @@ on:
 
 jobs:
   build:
-    goos:
-      - darwin
-      - linux
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
