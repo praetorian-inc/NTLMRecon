@@ -49,3 +49,4 @@
 /WebTicket
 /WebTicket/WebTicketService.svc
 /_windows/default.aspx?ReturnUrl=/
+/internal_windows_authentication/?targetId=14eb0435-3d32-4f1a-bae2-3d0498134d2a
