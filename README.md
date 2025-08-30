@@ -28,6 +28,18 @@ The following command can be leveraged to invoke the NTLM recon utility and disc
 NTLMRecon -t https://autodiscover.contoso.com -o json
 ```
 
+The following command can be leveraged to specify a custom Host header when testing endpoints that require it:
+
+```sh
+NTLMRecon -t https://192.168.1.100 -H mail.contoso.com
+```
+
+The following command can be leveraged to enable debug output for troubleshooting:
+
+```sh
+NTLMRecon -t https://autodiscover.contoso.com -debug
+```
+
 # Example JSON Output 
 
 Below is an example JSON output with the data we collect from the NTLM CHALLENGE_MESSAGE returned by the server:
