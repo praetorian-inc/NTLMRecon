@@ -26,7 +26,9 @@ import (
 
 func main() {
 	targetURL := flag.String("t", "", "the URL of the target to scan")
+	hostHeader := flag.String("H", "", "the Host header to use for HTTP requests")
 	outputMode := flag.String("o", "plaintext", "the output format of the data plaintext or JSON")
+	debugMode := flag.Bool("debug", false, "enable debug output")
 
 	flag.Parse()
 
@@ -49,7 +51,7 @@ func main() {
 		return
 	}
 
-	endpoints, err := NTLMRecon.BruteForceNTLMEndpoints(*targetURL)
+	endpoints, err := NTLMRecon.BruteForceNTLMEndpoints(*targetURL, *hostHeader, *debugMode)
 	if err != nil {
 		fmt.Printf("Error brute-forcing NTLM authentication endpoints (error: %s)\n", err)
 	}

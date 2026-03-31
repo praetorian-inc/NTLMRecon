@@ -39,13 +39,20 @@ func noRedirect(req *http.Request, via []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
-func BruteForceNTLMEndpoints(targetURL string) ([]structs.NTLMReconOutput, error) {
+func BruteForceNTLMEndpoints(targetURL string, hostHeader string, debug bool) ([]structs.NTLMReconOutput, error) {
 	var endpoints []structs.NTLMReconOutput
 
 	ntlmAppPaths := paths.GetEmbeddedPaths()
 
 	if len(ntlmAppPaths) == 0 {
 		return endpoints, fmt.Errorf("included wordlist is empty")
+	}
+	
+	if debug {
+		fmt.Printf("[DEBUG] Testing %d paths against target %s\n", len(ntlmAppPaths), targetURL)
+		if hostHeader != "" {
+			fmt.Printf("[DEBUG] Using Host header: %s\n", hostHeader)
+		}
 	}
 
 	url, err := url.Parse(targetURL)
@@ -60,17 +67,27 @@ func BruteForceNTLMEndpoints(targetURL string) ([]structs.NTLMReconOutput, error
 	}
 	defer fastdialerInstance.Close()
 
-	for _, ntlmAppPath := range ntlmAppPaths {
+	for i, ntlmAppPath := range ntlmAppPaths {
 		var endpoint structs.NTLMReconOutput
 
 		guessURL := url.Scheme + "://" + url.Host + ntlmAppPath
+		if debug {
+			fmt.Printf("[DEBUG] [%d/%d] Testing: %s\n", i+1, len(ntlmAppPaths), guessURL)
+		}
+		
+		// First, try a request without authentication to see if NTLM is offered
 		req, err := retryablehttp.NewRequest("GET", guessURL, nil)
 		if err != nil {
 			fmt.Println("Error creating HTTP request: ", err)
 			return endpoints, fmt.Errorf("unable to create HTTP request: %s", err)
 		}
-
-		req.Header.Set("Authorization", "NTLM "+MinimalNegotiatePacket)
+		
+		if hostHeader != "" {
+			req.Host = hostHeader
+			if debug {
+				fmt.Printf("[DEBUG] Setting req.Host to: %s\n", hostHeader)
+			}
+		}
 
 		//
 		// Here we configure the HTTP client to only use HTTP/1.1 since we have found some weird bugs
@@ -97,12 +114,74 @@ func BruteForceNTLMEndpoints(targetURL string) ([]structs.NTLMReconOutput, error
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return endpoints, fmt.Errorf("unable to send HTTP request: %s", err)
+			if debug {
+				fmt.Printf("[DEBUG] Initial request failed for %s: %s\n", guessURL, err)
+			}
+			continue
+		}
+		
+		if debug {
+			fmt.Printf("[DEBUG] Initial response status for %s: %d\n", guessURL, resp.StatusCode)
 		}
 
-		potentialChallengeMessages := resp.Header.Values("WWW-Authenticate")
+		// Check if NTLM is offered in the initial response
+		initialAuthHeaders := resp.Header.Values("WWW-Authenticate")
+		if debug {
+			fmt.Printf("[DEBUG] Initial WWW-Authenticate headers for %s: %v\n", guessURL, initialAuthHeaders)
+		}
+		
+		hasNTLM := false
+		for _, header := range initialAuthHeaders {
+			if strings.HasPrefix(header, "NTLM") || strings.HasPrefix(header, "Negotiate") {
+				hasNTLM = true
+				break
+			}
+		}
+		
+		if !hasNTLM {
+			if debug {
+				fmt.Printf("[DEBUG] No NTLM/Negotiate auth offered for %s\n", guessURL)
+			}
+			continue
+		}
+		
+		// Now send the NTLM negotiate packet
+		req2, err := retryablehttp.NewRequest("GET", guessURL, nil)
+		if err != nil {
+			continue
+		}
+		
+		req2.Header.Set("Authorization", "NTLM "+MinimalNegotiatePacket)
+		if hostHeader != "" {
+			req2.Host = hostHeader
+		}
+		
+		if debug {
+			fmt.Printf("[DEBUG] Sending NTLM negotiate packet to %s\n", guessURL)
+		}
+		
+		resp2, err := client.Do(req2)
+		if err != nil {
+			if debug {
+				fmt.Printf("[DEBUG] NTLM negotiate request failed for %s: %s\n", guessURL, err)
+			}
+			continue
+		}
+		
+		if debug {
+			fmt.Printf("[DEBUG] NTLM negotiate response status for %s: %d\n", guessURL, resp2.StatusCode)
+		}
+
+		potentialChallengeMessages := resp2.Header.Values("WWW-Authenticate")
+		
+		if debug {
+			fmt.Printf("[DEBUG] NTLM challenge headers for %s: %v\n", guessURL, potentialChallengeMessages)
+		}
 
 		if len(potentialChallengeMessages) == 0 {
+			if debug {
+				fmt.Printf("[DEBUG] No WWW-Authenticate header in NTLM response for %s\n", guessURL)
+			}
 			continue
 		}
 
@@ -118,9 +197,15 @@ func BruteForceNTLMEndpoints(targetURL string) ([]structs.NTLMReconOutput, error
 			}
 
 			if splitResponse[0] != "NTLM" {
+				if debug {
+					fmt.Printf("[DEBUG] Auth type is %s, not NTLM\n", splitResponse[0])
+				}
 				continue
 			}
-
+			
+			if debug {
+				fmt.Printf("[DEBUG] Found NTLM auth for %s\n", guessURL)
+			}
 			break
 		}
 
@@ -133,7 +218,14 @@ func BruteForceNTLMEndpoints(targetURL string) ([]structs.NTLMReconOutput, error
 
 		metadata, err := PackageMetadataFromChallengeMessage(rawBytes)
 		if err != nil {
+			if debug {
+				fmt.Printf("[DEBUG] Failed to decode NTLM challenge for %s: %s\n", guessURL, err)
+			}
 			continue
+		}
+		
+		if debug {
+			fmt.Printf("[DEBUG] Successfully decoded NTLM info for %s\n", guessURL)
 		}
 
 		endpoint.URL = guessURL
